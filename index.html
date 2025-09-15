@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Phone Dashboard — Single HTML</title>
+  <style>
+    /* Einfaches Tailwind-ähnliches Styling (minimal) */
+    :root{--bg:#f1f5f9;--card:#fff;--muted:#6b7280;--accent:#2563eb}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,Arial,Helvetica;background:var(--bg);color:#111}
+    .container{max-width:1100px;margin:28px auto;padding:16px}
+    .card{background:var(--card);border-radius:12px;box-shadow:0 6px 18px rgba(15,23,42,.06);padding:12px}
+    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+    button{cursor:pointer}
+    .btn{padding:8px 12px;border-radius:8px;border:1px solid #e6e9ef;background:transparent}
+    .btn-primary{background:var(--accent);color:#fff;border:none}
+    input,textarea{width:100%;padding:8px;border-radius:8px;border:1px solid #e6e9ef}
+    .grid{display:grid;gap:12px}
+    .cols-3{grid-template-columns:repeat(3,1fr)}
+    .module-card{padding:10px;border-radius:10px;background:#fafafa}
+    .small{font-size:13px;color:var(--muted)}
+    footer{margin-top:18px;color:var(--muted);font-size:13px}
+  </style>
+  <!-- React + ReactDOM UMD -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- App as an ES module (we need module for dynamic import()) -->
+  <script type="module">
+  const { useState, useEffect, useRef } = React;
+
+  const STORAGE_KEY = "phone-dashboard-modules-v1";
+
+  // Built-in modules as code strings (ESM exporting default + optional meta)
+  const BUILTIN_MODULES = [
+    {
+      id: "weather",
+      name: "Weather (built-in)",
+      description: "Zeigt aktuelles Wetter (Open-Meteo).",
+      source: "inline",
+      code: `
+        export const meta = { id: 'weather', name: 'Weather', description: 'Local weather (Open-Meteo)' };
+        export default function WeatherModule(){ 
+          const { useState, useEffect } = React;
+          const [loading, setLoading] = useState(true);
+          const [err, setErr] = useState(null);
+          const [data, setData] = useState(null);
+          useEffect(()=>{
+            if(!navigator.geolocation){ setErr('Geolocation nicht verfügbar'); setLoading(false); return; }
+            navigator.geolocation.getCurrentPosition(async (pos)=>{
+              try{
+                const lat = pos.coords.latitude, lon = pos.coords.longitude;
+                const res = await fetch(\`https://api.open-meteo.com/v1/forecast?latitude=\${lat}&longitude=\${lon}&current_weather=true\`);
+                if(!res.ok) throw new Error('Fetch fehlgeschlagen');
+                const json = await res.json();
+                setData(json.current_weather);
+              }catch(e){ setErr(e.message || String(e)); }
+              setLoading(false);
+            }, (e)=>{ setErr(e.message || String(e)); setLoading(false); });
+          },[]);
+          if(loading) return React.createElement('div', {className:'p-2 small'}, 'Wetter wird geladen...');
+          if(err) return React.createElement('div', {className:'p-2 small', style:{color:'crimson'}}, 'Fehler: ' + err);
+          if(!data) return React.createElement('div', {className:'p-2 small'}, 'Keine Daten');
+          return React.createElement('div', {className:'p-2'},
+            React.createElement('div', null, 'Temperatur: ' + data.temperature + '°C'),
+            React.createElement('div', null, 'Wind: ' + data.windspeed + ' m/s')
+          );
+        }
+      `
+    },
+    {
+      id: "battery",
+      name: "Battery (built-in)",
+      description: "Zeigt Batterie-Level (sofern unterstützt).",
+      source: "inline",
+      code: `
+        export const meta = { id:'battery', name:'Battery', description:'Battery status' };
+        export default function BatteryModule(){
+          const { useState, useEffect } = React;
+          const [info, setInfo] = useState(null);
+          useEffect(()=>{
+            let mounted = true;
+            if(navigator.getBattery){
+              navigator.getBattery().then(batt=>{
+                const update = ()=>mounted && setInfo({level: batt.level, charging: batt.charging});
+                update();
+                batt.addEventListener('levelchange', update);
+                batt.addEventListener('chargingchange', update);
+                // cleanup
+                const cleanup = ()=>{ batt.removeEventListener('levelchange', update); batt.removeEventListener('chargingchange', update); };
+                // store cleanup on window in case module stays loaded
+                window.__battery_cleanup = cleanup;
+              }).catch(()=>{ mounted && setInfo(null); });
+            } else {
+              setInfo(null);
+            }
+            return ()=>{ mounted=false; if(window.__battery_cleanup){ try{ window.__battery_cleanup(); }catch(e){} } };
+          },[]);
+          if(!info) return React.createElement('div', {className:'p-2 small'}, 'Battery API nicht unterstützt oder Berechtigung verweigert');
+          return React.createElement('div', {className:'p-2'},
+            React.createElement('div', null, 'Level: ' + Math.round(info.level*100) + '%'),
+            React.createElement('div', null, 'Charging: ' + (info.charging ? 'Yes' : 'No'))
+          );
+        }
+      `
+    },
+    {
+      id: "network",
+      name: "Network (built-in)",
+      description: "Online-/Offline-Status.",
+      source: "inline",
+      code: `
+        export const meta = { id:'network', name:'Network', description:'Network info' };
+        export default function NetworkModule(){
+          const { useState, useEffect } = React;
+          const [info, setInfo] = useState({online: navigator.onLine});
+          useEffect(()=>{
+            const onOnline = ()=>setInfo({online:true});
+            const onOffline = ()=>setInfo({online:false});
+            window.addEventListener('online', onOnline);
+            window.addEventListener('offline', onOffline);
+            return ()=>{ window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+          },[]);
+          return React.createElement('div', {className:'p-2'}, React.createElement('div', null, 'Online: ' + (info.online ? 'Yes' : 'No')));
+        }
+      `
+    }
+  ];
+
+  // Utility to create blob URL from code
+  function makeModuleBlobURL(code){
+    const blob = new Blob([code], {type:'text/javascript'});
+    return URL.createObjectURL(blob);
+  }
+
+  // App component
+  function PhoneDashboard(){
+    const [modules, setModules] = useState([]);
+    const [importUrl, setImportUrl] = useState('');
+    const [inlineCode, setInlineCode] = useState('');
+    const [marketplaceOpen, setMarketplaceOpen] = useState(true);
+    const moduleRefs = useRef({}); // { id: { module: DefaultExport, meta, blobUrl } }
+
+    // load saved or initialize built-ins
+    useEffect(()=>{
+      try{
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if(raw){
+          const parsed = JSON.parse(raw);
+          setModules(parsed);
+          return;
+        }
+      }catch(e){}
+      const initial = BUILTIN_MODULES.map(m=>({
+        id: m.id,
+        name: m.name,
+        description: m.description,
+        source: m.source,
+        code: m.code,
+        enabled: true
+      }));
+      setModules(initial);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+    },[]);
+
+    useEffect(()=>{ localStorage.setItem(STORAGE_KEY, JSON.stringify(modules)); },[modules]);
+
+    async function loadModule(mod){
+      // reuse if loaded
+      if(moduleRefs.current[mod.id] && moduleRefs.current[mod.id].module) return moduleRefs.current[mod.id];
+      try{
+        let blobUrl;
+        if(mod.source === 'inline'){
+          blobUrl = makeModuleBlobURL(mod.code);
+        } else if(mod.source === 'url'){
+          const res = await fetch(mod.url);
+          if(!res.ok) throw new Error('Remote Modul konnte nicht geladen werden');
+          const text = await res.text();
+          blobUrl = makeModuleBlobURL(text);
+        } else {
+          throw new Error('Unknown module source');
+        }
+        const imported = await import(/* @vite-ignore */ blobUrl);
+        const def = imported && (imported.default || imported);
+        const meta = imported && (imported.meta || imported.meta) || imported && imported.meta || imported?.meta;
+        moduleRefs.current[mod.id] = { module: def, meta, blobUrl };
+        return moduleRefs.current[mod.id];
+      }catch(e){ throw e; }
+    }
+
+    async function addModuleFromUrl(url){
+      const id = 'ext-' + Math.random().toString(36).slice(2,9);
+      const newMod = { id, name: url, description: 'Externes Modul', source: 'url', url, enabled:true };
+      setModules(prev=>[...prev, newMod]);
+      try{ await loadModule(newMod); } catch(e){ alert('Fehler beim Laden: ' + e.message); }
+    }
+
+    async function addInlineModule(code, name){
+      const id = 'inline-' + Math.random().toString(36).slice(2,9);
+      const newMod = { id, name: name||id, description: 'Inline Modul', source: 'inline', code, enabled:true };
+      setModules(prev=>[...prev, newMod]);
+      try{ await loadModule(newMod); } catch(e){ alert('Fehler beim Evaluieren: ' + e.message); }
+    }
+
+    function toggleModule(id){
+      setModules(prev => prev.map(m => m.id === id ? {...m, enabled: !m.enabled} : m));
+    }
+
+    function removeModule(id){
+      if(!confirm('Modul entfernen? Das kann nicht rückgängig gemacht werden.')) return;
+      setModules(prev => prev.filter(m=>m.id !== id));
+      if(moduleRefs.current[id] && moduleRefs.current[id].blobUrl){ try{ URL.revokeObjectURL(moduleRefs.current[id].blobUrl); }catch(e){} delete moduleRefs.current[id]; }
+    }
+
+    // Module card: loads module and shows its component
+    function ModuleCard({mod}){
+      const [error, setError] = useState(null);
+      const [LoadedComp, setLoadedComp] = useState(null);
+      useEffect(()=>{
+        let mounted = true;
+        (async ()=>{
+          try{
+            const loaded = await loadModule(mod);
+            if(!mounted) return;
+            const C = loaded && loaded.module ? loaded.module : ()=>React.createElement('div', null, 'Kein Default-Export');
+            setLoadedComp(()=>C);
+          }catch(e){ if(mounted) setError(e.message || String(e)); }
+        })();
+        return ()=>{ mounted=false; }
+      },[mod.id]);
+
+      return React.createElement('div', {className:'module-card card'},
+        React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'start'}},
+          React.createElement('div', null, React.createElement('strong', null, mod.name || mod.id), React.createElement('div', {className:'small'}, mod.description || '')),
+          React.createElement('div', null,
+            React.createElement('button', {className:'btn', onClick:()=>toggleModule(mod.id)}, mod.enabled ? 'Disable' : 'Enable'),
+            React.createElement('button', {className:'btn', style:{marginLeft:8}, onClick:()=>removeModule(mod.id)}, 'Remove')
+          )
+        ),
+        React.createElement('div', {style:{marginTop:10}},
+          error ? React.createElement('div', {style:{color:'crimson'}}, 'Load error: ' + error) :
+            (!LoadedComp ? React.createElement('div', {className:'small'}, 'Modul lädt...') : React.createElement(LoadedComp, {}))
+        )
+      );
+    }
+
+    // Renderer for active module in dashboard
+    function ActiveModuleRenderer({mod}){
+      const [Comp, setComp] = useState(null);
+      const [err, setErr] = useState(null);
+      useEffect(()=>{
+        let mounted = true;
+        (async ()=>{
+          try{
+            if(moduleRefs.current[mod.id] && moduleRefs.current[mod.id].module){ if(mounted) setComp(()=>moduleRefs.current[mod.id].module); return; }
+            const loaded = await (async ()=>{
+              if(mod.source === 'inline'){ const url = makeModuleBlobURL(mod.code); const imported = await import(url); moduleRefs.current[mod.id] = {module: imported.default, blobUrl: url}; return imported.default; }
+              else if(mod.source === 'url'){ const res = await fetch(mod.url); if(!res.ok) throw new Error('Remote Modul konnte nicht geladen werden'); const text = await res.text(); const url = makeModuleBlobURL(text); const imported = await import(url); moduleRefs.current[mod.id] = {module: imported.default, blobUrl: url}; return imported.default; }
+              throw new Error('Unbekannte Quelle');
+            })();
+            if(mounted) setComp(()=>loaded);
+          }catch(e){ if(mounted) setErr(e.message || String(e)); }
+        })();
+        return ()=>{ mounted=false; };
+      },[mod.id]);
+
+      if(err) return React.createElement('div', {style:{color:'crimson'}}, 'Modul-Error: ' + err);
+      if(!Comp) return React.createElement('div', {className:'small'}, 'Lade...');
+      return React.createElement(Comp, {});
+    }
+
+    // Render
+    return React.createElement('div', {className:'container'},
+      React.createElement('div', {className:'card'},
+        React.createElement('header', null,
+          React.createElement('h1', null, 'Phone Dashboard'),
+          React.createElement('div', null, React.createElement('button', {className:'btn btn-primary', onClick:()=>setMarketplaceOpen(o=>!o)}, marketplaceOpen ? 'Marketplace schließen' : 'Marketplace öffnen'))
+        ),
+
+        marketplaceOpen && React.createElement('section', {style:{marginBottom:12}},
+          React.createElement('h2', null, 'Module Marketplace / Importer'),
+          React.createElement('p', {className:'small'}, 'Externe ES-Module müssen default eine React-Komponente exportieren. Achtung: Beliebiges JS wird ausgeführt.'),
+
+          React.createElement('div', {style:{display:'flex',gap:8,marginTop:8}},
+            React.createElement('input', {placeholder:'https://example.com/modul.mjs', value:importUrl, onChange:e=>setImportUrl(e.target.value)}),
+            React.createElement('button', {className:'btn', onClick:()=>{ if(importUrl) addModuleFromUrl(importUrl).catch(e=>alert(e.message)); }}, 'Import URL')
+          ),
+
+          React.createElement('div', {style:{marginTop:12}},
+            React.createElement('div', {className:'small'}, 'Oder Module-Code einfügen (ESM):'),
+            React.createElement('textarea', {rows:6, value:inlineCode, onChange:e=>setInlineCode(e.target.value)}),
+            React.createElement('div', {style:{textAlign:'right',marginTop:8}},
+              React.createElement('button', {className:'btn btn-primary', onClick:()=>{ if(inlineCode) addInlineModule(inlineCode, 'User module'); setInlineCode(''); }}, 'Inline Modul hinzufügen')
+            )
+          ),
+
+          React.createElement('div', {style:{marginTop:12}},
+            React.createElement('h3', null, 'Installierte Module:'),
+            React.createElement('div', {className:'grid cols-3', style:{marginTop:8}},
+              modules.map(m => React.createElement(ModuleCard, {key:m.id, mod:m}))
+            )
+          )
+        ),
+
+        React.createElement('section', null,
+          React.createElement('h2', null, 'Aktives Dashboard'),
+          React.createElement('div', {style:{display:'flex',flexWrap:'wrap',gap:12,marginTop:8}},
+            modules.filter(m=>m.enabled).map(m => React.createElement('div', {key:m.id, style:{minWidth:260,maxWidth:360}}, 
+              React.createElement('div', {className:'card'}, 
+                React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},
+                  React.createElement('strong', null, m.name || m.id),
+                  React.createElement('button', {className:'btn', onClick:()=>toggleModule(m.id)}, 'Disable')
+                ),
+                React.createElement('div', {style:{marginTop:8}}, React.createElement(ActiveModuleRenderer, {mod:m}))
+              )
+            ))
+          )
+        ),
+
+        React.createElement('footer', {style:{marginTop:12}},
+          React.createElement('div', null, 'Persistence: Module werden in localStorage unter "' + STORAGE_KEY + '" gespeichert.'),
+          React.createElement('div', null, React.createElement('small', {className:'small'}, 'Hinweis: Zum Laden externer Module müssen diese CORS erlauben oder als plain-text abrufbar sein.'))
+        )
+      )
+    );
+  } // Ende App
+
+  // Mount app
+  const rootEl = document.getElementById('root');
+  ReactDOM.createRoot(rootEl).render(React.createElement(PhoneDashboard));
+
+  </script>
+</body>
+</html>
